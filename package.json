@@ -1,16 +1,19 @@
 {
-  "name": "devsecops-demo-app",
+  "name": "devsecops-demo-app-fixed",
   "version": "1.0.0",
-  "description": "Ung dung web nho co chu dich de lo hong - dung cho demo pipeline DevSecOps",
+  "description": "Ban DA VA cua app demo - dung de so sanh truoc/sau (scanner do -> xanh)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "node test/idor.test.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "express": "4.18.2",
-    "alasql": "1.7.3",
-    "jsonwebtoken": "8.5.1",
-    "lodash": "4.17.11"
+    "express": "^4.21.2",
+    "alasql": "^4.0.0",
+    "bcryptjs": "2.4.3",
+    "helmet": "7.1.0",
+    "jsonwebtoken": "9.0.2"
+  },
+  "overrides": {
+    "lodash": "^4.17.21"
   }
 }

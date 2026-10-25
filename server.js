@@ -1,39 +1,63 @@
 const express = require('express');
-const crypto = require('crypto');
+const helmet = require('helmet');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const alasql = require('alasql');
 
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is required');
+  process.exit(1);
+}
+
 const app = express();
+app.disable('x-powered-by');
+app.use(helmet());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-const JWT_SECRET = 'd831fc148dda64180b846a3c99d4f0b304b34b1ebdcaf3375de2072e39397852';
-
-function md5(value) {
-  return crypto.createHash('md5').update(String(value)).digest('hex');
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 alasql('CREATE TABLE users (id INT, username STRING, password STRING, email STRING)');
 alasql('CREATE TABLE notes (id INT, author STRING, title STRING, body STRING)');
-alasql('INSERT INTO users VALUES (1, "admin", "' + md5('admin123') + '", "admin@demo.local")');
-alasql('INSERT INTO users VALUES (2, "alice", "' + md5('alice123') + '", "alice@demo.local")');
-alasql('INSERT INTO notes VALUES (1, "admin", "Welcome", "Welcome to NoteApp! Create and search your notes.")');
-alasql('INSERT INTO notes VALUES (2, "alice", "Shopping list", "Milk, eggs, coffee")');
+[[1, 'admin', 'admin123', 'admin@demo.local'],
+ [2, 'alice', 'alice123', 'alice@demo.local']].forEach(u => {
+  alasql('INSERT INTO users VALUES (?,?,?,?)', [u[0], u[1], bcrypt.hashSync(u[2], 10), u[3]]);
+});
+alasql('INSERT INTO notes VALUES (?,?,?,?)', [1, 'admin', 'Welcome', 'Welcome to NoteApp! Create and search your notes.']);
+alasql('INSERT INTO notes VALUES (?,?,?,?)', [2, 'alice', 'Shopping list', 'Milk, eggs, coffee']);
 let noteSeq = 2;
 
-function currentUser(req) {
+function getToken(req) {
+  const header = req.headers.authorization || '';
+  if (header.startsWith('Bearer ')) return header.slice(7);
   const match = /(?:^|;\s*)token=([^;]+)/.exec(req.headers.cookie || '');
-  if (!match) return null;
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function currentUser(req) {
   try {
-    return jwt.verify(decodeURIComponent(match[1]), JWT_SECRET);
+    return jwt.verify(getToken(req), JWT_SECRET);
   } catch (e) {
     return null;
   }
 }
 
+function auth(req, res, next) {
+  const user = currentUser(req);
+  if (!user) {
+    return res.status(401).send(layout('Unauthorized', '<h2>401 — please sign in</h2><a href="/login">Login</a>', null));
+  }
+  req.user = user;
+  next();
+}
+
 function layout(title, body, user) {
   const account = user
-    ? `<span class="user">Hi, ${user.username}</span><a href="/logout">Logout</a>`
+    ? `<span class="user">Hi, ${esc(user.username)}</span><a href="/logout">Logout</a>`
     : `<a href="/login">Login</a>`;
   const profileLink = user ? '/profile/' + user.id : '/login';
   return `<!doctype html>
@@ -41,7 +65,7 @@ function layout(title, body, user) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title} · NoteApp</title>
+<title>${esc(title)} · NoteApp</title>
 <style>
  :root{--bg:#f8fafc;--fg:#0f172a;--muted:#64748b;--brand:#4f46e5;--border:#e2e8f0}
  *{box-sizing:border-box}
@@ -87,7 +111,7 @@ ${body}
 
 app.get('/', (req, res) => {
   const user = currentUser(req);
-  const hello = user ? `<p>You are signed in as <b>${user.username}</b>.</p>` : '';
+  const hello = user ? `<p>You are signed in as <b>${esc(user.username)}</b>.</p>` : '';
   res.send(layout('Home', `
     <h1>Welcome to NoteApp</h1>
     <p class="muted">Write notes and search them.</p>
@@ -106,20 +130,15 @@ app.get('/login', (req, res) => {
 
 app.post('/login', (req, res) => {
   const { username, password } = req.body || {};
-  const query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + md5(password || '') + "'";
-  let rows = [];
-  try {
-    rows = alasql(query);
-  } catch (e) {
-    return res.status(500).send(layout('Error', `<h2 class="bad">Server error</h2><pre>${e.message}\n\n${query}</pre>`, null));
-  }
-  if (rows.length > 0) {
-    const token = jwt.sign({ id: rows[0].id, username: rows[0].username }, JWT_SECRET);
-    res.setHeader('Set-Cookie', 'token=' + token + '; Path=/');
+  const rows = alasql('SELECT * FROM users WHERE username = ?', [username]);
+  const u = rows[0];
+  if (u && bcrypt.compareSync(password || '', u.password)) {
+    const token = jwt.sign({ id: u.id, username: u.username }, JWT_SECRET, { expiresIn: '1h' });
+    res.setHeader('Set-Cookie', 'token=' + token + '; Path=/; HttpOnly; SameSite=Lax');
     return res.send(layout('Login successful', `
       <h2 class="ok">Login successful</h2>
-      <p>Welcome, <b>${rows[0].username}</b> (id=${rows[0].id}).</p>
-      <p><a href="/logout">Logout</a></p>`, rows[0]));
+      <p>Welcome, <b>${esc(u.username)}</b>.</p>
+      <p><a href="/logout">Logout</a></p>`, u));
   }
   res.status(401).send(layout('Login failed', `
     <h2 class="bad">Invalid username or password</h2>
@@ -127,26 +146,26 @@ app.post('/login', (req, res) => {
 });
 
 app.get('/logout', (req, res) => {
-  res.setHeader('Set-Cookie', 'token=; Path=/; Max-Age=0');
+  res.setHeader('Set-Cookie', 'token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
   res.redirect('/');
 });
 
 app.get('/search', (req, res) => {
   const q = req.query.q || '';
   const notes = q ? alasql('SELECT * FROM notes WHERE title LIKE ? OR body LIKE ?', ['%' + q + '%', '%' + q + '%']) : [];
-  const list = notes.map(n => `<div class="card"><b>${n.title}</b><br>${n.body}</div>`).join('');
+  const list = notes.map(n => `<div class="card"><b>${esc(n.title)}</b><br>${esc(n.body)}</div>`).join('');
   res.send(layout('Search', `
     <h2>Search notes</h2>
     <form method="get" action="/search">
-      <input name="q" value="${q}" placeholder="Search your notes">
+      <input name="q" value="${esc(q)}" placeholder="Search your notes">
       <button>Search</button>
     </form>
-    ${q ? `<p>Results for: ${q}</p>${list || '<div class="card">No notes found.</div>'}` : ''}`, currentUser(req)));
+    ${q ? `<p>Results for: ${esc(q)}</p>${list || '<div class="card">No notes found.</div>'}` : ''}`, currentUser(req)));
 });
 
 app.get('/notes', (req, res) => {
   const notes = alasql('SELECT * FROM notes');
-  const list = notes.map(n => `<div class="card"><b>${n.title}</b> <span class="muted">by ${n.author}</span><br>${n.body}</div>`).join('');
+  const list = notes.map(n => `<div class="card"><b>${esc(n.title)}</b> <span class="muted">by ${esc(n.author)}</span><br>${esc(n.body)}</div>`).join('');
   res.send(layout('Notes', `
     <h2>Notes</h2>
     <form method="post" action="/notes">
@@ -165,17 +184,26 @@ app.post('/notes', (req, res) => {
   res.redirect('/notes');
 });
 
-app.get('/profile/:id', (req, res) => {
-  const rows = alasql('SELECT id, username, email FROM users WHERE id=' + req.params.id);
+app.get('/profile/:id', auth, (req, res) => {
+  const id = Number(req.params.id);
+  if (req.user.id !== id) {
+    return res.status(403).send(layout('Forbidden', '<h2>403 — you cannot view this profile</h2>', req.user));
+  }
+  const rows = alasql('SELECT id, username, email FROM users WHERE id = ?', [id]);
   const u = rows[0];
-  if (!u) return res.status(404).send(layout('Not found', '<h2>No such profile.</h2>', currentUser(req)));
+  if (!u) return res.status(404).send(layout('Not found', '<h2>No such profile.</h2>', req.user));
   res.send(layout('Profile', `
     <h2>User profile</h2>
     <div class="card">
-      <b>ID:</b> ${u.id}<br>
-      <b>Username:</b> ${u.username}<br>
-      <b>Email:</b> ${u.email}
-    </div>`, currentUser(req)));
+      <b>ID:</b> ${esc(u.id)}<br>
+      <b>Username:</b> ${esc(u.username)}<br>
+      <b>Email:</b> ${esc(u.email)}
+    </div>`, req.user));
+});
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).send(layout('Error', '<h2>Server error</h2>', null));
 });
 
 const PORT = process.env.PORT || 3000;
