@@ -1,0 +1,100 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  secret-scan:
+    name: "1. Secret Scan (Gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+
+  sast:
+    name: "2. SAST (Semgrep)"
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Semgrep gate (rule tuy chinh cua nhom)"
+        continue-on-error: true
+        run: semgrep --config .semgrep/rules.yml --error .
+      - name: "Semgrep advisory (ruleset cong khai - tham khao, khong chan)"
+        continue-on-error: true
+        run: semgrep --config p/owasp-top-ten --config p/javascript --config p/secrets . || true
+
+  sca:
+    name: "3. SCA (npm audit + Trivy + SBOM)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: npm audit
+        continue-on-error: true
+        run: |
+          npm install --package-lock-only || npm install
+          npm audit --audit-level=high
+      - name: Install Trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+      - name: Trivy fs
+        continue-on-error: true
+        run: trivy fs --scanners vuln --severity HIGH,CRITICAL .
+      - name: SBOM
+        run: trivy fs --format cyclonedx --output sbom.json .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  build-and-scan:
+    name: "4. Build + Image/IaC scan"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        continue-on-error: true
+        with:
+          dockerfile: Dockerfile
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@v12
+        continue-on-error: true
+        with:
+          directory: .
+          framework: dockerfile
+      - name: Build image
+        run: docker build -t noteapp:ci .
+      - name: Install Trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+      - name: Trivy image
+        continue-on-error: true
+        run: trivy image --severity HIGH,CRITICAL noteapp:ci
+
+  dast:
+    name: "5. DAST (OWASP ZAP + test IDOR)"
+    runs-on: ubuntu-latest
+    needs: [secret-scan, sast, sca, build-and-scan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run app
+        run: |
+          docker build -t noteapp:ci .
+          docker run -d --name demo -e JWT_SECRET=ci-demo-secret -p 3000:3000 noteapp:ci
+          # Cho app san sang (toi da ~30s) truoc khi test/ZAP
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/ >/dev/null && { echo "App is up"; break; }
+            sleep 1
+          done
+          curl -sf http://localhost:3000/ >/dev/null || { echo "App KHONG khoi dong duoc. Container logs:"; docker logs demo; exit 1; }
+      - name: Test IDOR (authz test)
+        continue-on-error: true
+        run: node test/idor.test.js
+      - name: OWASP ZAP Baseline
+        continue-on-error: true
+        run: docker run --rm -t --network host ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://localhost:3000 || true

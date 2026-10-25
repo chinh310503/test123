@@ -1,0 +1,258 @@
+rules:
+  - id: sql-injection-string-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input is concatenated directly into a SQL query, which allows SQL
+      injection. Use parameterized queries / prepared statements instead.
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 - Injection"
+      references:
+        - https://owasp.org/Top10/A03_2021-Injection/
+    patterns:
+      - pattern: alasql("..." + ...)
+
+  - id: weak-md5-hash
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A weak hashing algorithm (MD5 or SHA1) is used. These are broken for
+      security purposes. Use bcrypt/scrypt/argon2 for passwords and SHA-256+
+      otherwise.
+    metadata:
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+      owasp: "A02:2021 - Cryptographic Failures"
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createHash("md5")
+          - pattern: crypto.createHash("sha1")
+
+  - id: hardcoded-secret
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Possible hardcoded secret or credential in source code. Load secrets from
+      environment variables or a secrets manager instead of committing them.
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+    patterns:
+      - pattern: $X = "$VAL"
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i).*(secret|token|passwd|password|api_?key|private_?key).*
+      - metavariable-regex:
+          metavariable: $VAL
+          regex: ^[A-Za-z0-9+/=_\-]{16,}$
+
+  - id: jwt-missing-expiration
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      JWT is signed without an expiration (no expiresIn). Such tokens stay valid
+      forever and cannot be revoked, enabling token replay. Set expiresIn.
+    metadata:
+      cwe: "CWE-613: Insufficient Session Expiration"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+    patterns:
+      - pattern: jwt.sign($PAYLOAD, $SECRET)
+
+  - id: command-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Data is passed to a shell command, which can lead to OS command
+      injection. Avoid the shell and use execFile/spawn with an argument array.
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec(...)
+          - pattern: child_process.execSync(...)
+          - pattern: require("child_process").exec(...)
+
+  - id: code-injection-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Dynamic code execution via eval() or new Function(). If any input is
+      attacker-controlled this is remote code execution. Parse data explicitly.
+    metadata:
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: new Function(...)
+
+  - id: nosql-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Request data is passed straight into a NoSQL query, which allows NoSQL
+      injection (e.g. operator injection). Validate and cast inputs first.
+    metadata:
+      cwe: "CWE-943: Improper Neutralization of Special Elements in Data Query Logic"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: $COLL.find(req.$P)
+          - pattern: $COLL.find(req.$P.$Q)
+          - pattern: $COLL.findOne(req.$P)
+          - pattern: $COLL.findOne(req.$P.$Q)
+
+  - id: insecure-randomness
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Math.random() is not cryptographically secure. Use crypto.randomBytes()
+      or crypto.randomUUID() for tokens, session IDs and secrets.
+    metadata:
+      cwe: "CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator"
+    patterns:
+      - pattern: Math.random()
+
+  - id: weak-cipher
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A weak or deprecated cipher is used. crypto.createCipher is deprecated and
+      DES/RC4 are broken. Use crypto.createCipheriv with AES-256-GCM.
+    metadata:
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+      owasp: "A02:2021 - Cryptographic Failures"
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createCipher(...)
+          - pattern: crypto.createCipheriv("des", ...)
+          - pattern: crypto.createCipheriv("rc4", ...)
+
+  - id: path-traversal-fs
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input is used to build a filesystem path, which allows path
+      traversal. Normalize/validate the path or map inputs to an allow-list.
+    metadata:
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
+      owasp: "A01:2021 - Broken Access Control"
+    patterns:
+      - pattern-either:
+          - pattern: fs.readFile(req.$P.$Q, ...)
+          - pattern: fs.readFileSync(req.$P.$Q, ...)
+          - pattern: res.sendFile(req.$P.$Q, ...)
+
+  - id: ssrf-user-input
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A request is made to a URL built from user input, which allows SSRF.
+      Validate the host against an allow-list and block internal addresses.
+    metadata:
+      cwe: "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp: "A10:2021 - Server-Side Request Forgery"
+    patterns:
+      - pattern-either:
+          - pattern: http.get(req.$P.$Q, ...)
+          - pattern: https.get(req.$P.$Q, ...)
+          - pattern: axios.get(req.$P.$Q, ...)
+          - pattern: fetch(req.$P.$Q, ...)
+
+  - id: express-open-redirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      User input is used directly in a redirect, enabling open redirect and
+      phishing. Validate the target against an allow-list of safe URLs.
+    metadata:
+      cwe: "CWE-601: URL Redirection to Untrusted Site (Open Redirect)"
+    patterns:
+      - pattern-either:
+          - pattern: res.redirect(req.query.$Q)
+          - pattern: res.redirect(req.params.$Q)
+          - pattern: res.redirect(req.body.$Q)
+
+  - id: insecure-deserialization
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Untrusted data is deserialized or evaluated in a VM context, which can
+      lead to remote code execution. Avoid native deserialization of user data.
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+    patterns:
+      - pattern-either:
+          - pattern: $X.unserialize(...)
+          - pattern: vm.runInNewContext(...)
+          - pattern: vm.runInThisContext(...)
+
+  - id: dom-xss-sink
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Assigning to innerHTML / document.write with unescaped data can cause
+      DOM-based XSS. Use textContent or a sanitizer before writing HTML.
+    metadata:
+      cwe: "CWE-79: Improper Neutralization of Input During Web Page Generation"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = ...
+          - pattern: document.write(...)
+
+  - id: cors-allow-all-origins
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      CORS is configured to allow any origin (*). Combined with credentials this
+      exposes user data cross-origin. Restrict to an explicit allow-list.
+    metadata:
+      cwe: "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      owasp: "A05:2021 - Security Misconfiguration"
+    patterns:
+      - pattern-either:
+          - pattern: res.setHeader("Access-Control-Allow-Origin", "*")
+          - pattern: 'cors({origin: "*"})'
+
+  - id: xxe-entity-expansion
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      XML is parsed with external entities enabled (noent: true), which allows
+      XXE (file read / SSRF). Keep entity expansion disabled.
+    metadata:
+      cwe: "CWE-611: Improper Restriction of XML External Entity Reference"
+      owasp: "A05:2021 - Security Misconfiguration"
+    patterns:
+      - pattern: 'libxmljs.parseXml($X, {noent: true})'
+
+  - id: tls-verification-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      TLS certificate verification is disabled (rejectUnauthorized: false),
+      which allows man-in-the-middle attacks. Keep certificate validation on.
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+    patterns:
+      - pattern: "rejectUnauthorized: false"
+
+  - id: express-missing-helmet
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      This Express app does not use the helmet middleware, so security response
+      headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options) are missing.
+      Add app.use(helmet()).
+    metadata:
+      cwe: "CWE-693: Protection Mechanism Failure"
+      owasp: "A05:2021 - Security Misconfiguration"
+    patterns:
+      - pattern: $APP = express()
+      - pattern-not-inside: |
+          $APP = express()
+          ...
+          $APP.use(helmet(...))

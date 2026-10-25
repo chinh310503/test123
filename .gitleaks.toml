@@ -1,0 +1,10 @@
+title = "NoteApp - Gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "demo-generic-secret"
+description = "Bien *_SECRET / API_KEY / TOKEN gan chuoi dai"
+regex = '''(?i)(secret|api[_-]?key|token)\s*[:=]\s*['"][0-9a-zA-Z\-_]{16,}['"]'''
+tags = ["secret", "demo"]
